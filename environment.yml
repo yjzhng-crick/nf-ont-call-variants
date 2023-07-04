@@ -1,0 +1,18 @@
+name: nf-ont-call-variants
+
+channels:
+    - conda-forge
+    - bioconda
+
+dependencies:
+    - python
+    - pip
+    - openjdk
+    - cutadapt
+    - picard
+    - minimap2
+    - bowtie2
+    - fastqc
+    - multiqc
+    - samtools
+    - bcftools
