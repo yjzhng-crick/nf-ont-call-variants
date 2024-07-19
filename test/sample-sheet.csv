@@ -1,0 +1,3 @@
+﻿sample_id,reads
+WT,reads_1/raw_reads.fastq.gz
+mutant,reads_2/raw_reads.fastq.gz
