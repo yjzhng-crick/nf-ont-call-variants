@@ -269,13 +269,13 @@ process TRIM_CUTADAPT {
 
    script:
    """
-   ln -s ${reads} ${sample_id}.fastq.qz
+   ln -s ${reads} ${sample_id}.fastq.gz
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
 		-o ${sample_id}.trimmed.fastq.gz \
       --json=${sample_id}.cutadapt.json \
-		${sample_id}.fastq.qz > ${sample_id}.cutadapt.log
+		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
    """
    stub:
    """
@@ -285,7 +285,7 @@ process TRIM_CUTADAPT {
 		--report=full \
 		-o ${sample_id}.trimmed.fastq.gz \
       --json=${sample_id}.cutadapt.json \
-		${sample_id}.fastq.qz > ${sample_id}.cutadapt.log
+		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
    """
 }
 
