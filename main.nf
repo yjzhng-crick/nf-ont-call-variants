@@ -279,7 +279,7 @@ process TRIM_CUTADAPT {
    """
    stub:
    """
-   zcat ${reads} | head -n1000 | gzip --best > ${sample_id}.fastq
+   zcat ${reads} | head -n1000 | gzip --best > ${sample_id}.fastq.gz
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
