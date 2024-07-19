@@ -24,7 +24,7 @@ if ( params.help ) {
          relative to a wildtype control.
 
          Usage:
-            nextflow run scbirlab/nf-ont-call-variants --sample_sheet <csv> --inputs <dir> --outputs <dir> --genome_fasta_dir <dir> 
+            nextflow run scbirlab/nf-ont-call-variants --sample_sheet <csv> --inputs <dir> --genome_fasta <genome.fasta> --snpeff_database <organism-id>
             nextflow run scbirlab/nf-ont-call-variants -c <config-file>
 
          Required parameters:
@@ -38,10 +38,10 @@ if ( params.help ) {
                                  often end in the assembly name, such as `gca_000015005`, 
                                  which you can check matches your `genome_fasta`.
 
-         Optional parameters (with defaults):   
-            gatk_path         Path to GATK executable.
-            picard_path       Path to Picard executable.
-            snpeff_path       Path to snpEff executable.
+         Optional parameters (with defaults):  
+            inputs             Directory containing inputs. Default: "./inputs". 
+            gatk_image         Path to GATK executable.
+            snpeff_url         URL to download snpEff.
             trim_qual = 10     For `cutadapt`, the minimum Phred score for trimming 3' calls
             min_length = 10    For `cutadapt`, the minimum trimmed length of a read. Shorter 
                                  reads will be discarded.
@@ -77,10 +77,11 @@ log.info """\
          S C B I R   V A R I A N T   C A L L I N G   P I P E L I N E
          ===========================================================
          software
-            GATK           : ${params.gatk_path}
+            GATK           : ${params.gatk_image}
             Clair3         : ${params.clair3_image}
-            snpEff         : ${params.snpeff_path}
+            snpEff         : ${params.snpeff_url}
          inputs
+            input dir.     : ${params.inputs}
             sample sheet   : ${params.sample_sheet}
          genome locations
             FASTA          : ${params.genome_fasta}
