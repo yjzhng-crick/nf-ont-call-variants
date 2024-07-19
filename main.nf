@@ -237,7 +237,13 @@ process FASTQC {
    script:
    """
    zcat ${reads} > ${sample_id}.fastq
-   fastqc --noextract --memory 10000 --threads 4 ${sample_id}.fastq
+   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
+   rm ${sample_id}.fastq
+   """
+   stub:
+   """
+   zcat ${reads} | head -n1000 > ${sample_id}.fastq
+   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
    rm ${sample_id}.fastq
    """
 
@@ -264,6 +270,16 @@ process TRIM_CUTADAPT {
    script:
    """
    ln -s ${reads} ${sample_id}.fastq.qz
+   cutadapt \
+		-q ${params.trim_qual},${params.trim_qual} \
+		--report=full \
+		-o ${sample_id}.trimmed.fastq.gz \
+      --json=${sample_id}.cutadapt.json \
+		${sample_id}.fastq.qz > ${sample_id}.cutadapt.log
+   """
+   stub:
+   """
+   zcat ${reads} | head -n1000 | gzip --best > ${sample_id}.fastq
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
