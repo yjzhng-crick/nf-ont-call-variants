@@ -1,2 +1,7 @@
 .nextflow*
-work/*
+/work
+/test/outputs
+/test/work
+/test/*.html
+~$*.xlsx
+*.html
