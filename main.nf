@@ -163,15 +163,14 @@ workflow {
                           .combine( LOAD_CLAIR3.out ) \
     | CLAIR3
 
-   CLAIR3.out.main.collect { it[1] }
-                  .map { [it] }
-                  .combine( CLAIR3.out.index.collect()
-                                            .map { [it] } )
-                  .combine( fasta_faidx_dict )
-                  .combine( LOAD_GATK.out ) \
-      | COMBINE_GENOTYPE_GVCFS | FILTER_VAR
+   CLAIR3.out.main | NORMALIZE_VCFS
 
-   SNPEFF(FILTER_VAR.out, Channel.value(params.snpeff_url), Channel.value(params.snpeff_database))
+   NORMALIZE_VCFS.out.map { it[0] }.concat( NORMALIZE_VCFS.out.map { it[1] } ).collect() \
+      | MERGE_VCFS 
+
+   SNPEFF( MERGE_VCFS.out, 
+           Channel.value(params.snpeff_url), 
+           Channel.value(params.snpeff_database) )
    SNPEFF.out.main.combine( LOAD_GATK.out ) | TO_TABLE
 
    TRIM_CUTADAPT.out.logs.concat(
@@ -415,6 +414,9 @@ process MINIMAP2_ALIGN {
 
    tag "${sample_id}" 
 
+   publishDir( path: processed_o, 
+               mode: 'copy' )
+
    input:
    tuple val( sample_id ), path( reads ), path( idx )
 
@@ -424,15 +426,11 @@ process MINIMAP2_ALIGN {
 
    script:
    """
-   minimap2 -y --eqx -Y \
-      --sam-hit-only --no-end-flt --sr --frag=yes \
-      -F 3000 \
+   minimap2 -aL --cs --M \
       -a ${idx} <(zcat ${reads}) \
-      -o ${sample_id}.mapped.sam 2> ${sample_id}.minimap2.log
-   samtools sort ${sample_id}.mapped.sam \
-      -O bam -l 9 -o ${sample_id}.mapped.bam
+      | samtools sort -@${task.cpus} -O bam -l 9 -o ${sample_id}.mapped.bam \
+      2> ${sample_id}.minimap2.log
    samtools index ${sample_id}.mapped.bam
-   rm ${sample_id}.mapped.sam
    """
 }
 
@@ -490,48 +488,42 @@ process CLAIR3 {
    tuple val( sample_id ), path( bamfile ), path( idx ), path( fasta ), path( fai ), path( dict ), path( clair3_image )
 
    output:
-   tuple val( sample_id ), path( "*.merge_output.gvcf.gz" ), path( "*.full_alignment.vcf.gz" ), emit: main
-   path "*.merge_output.gvcf.gz.tbi", emit: index
+   tuple val( sample_id ), path( "*.merge_output.vcf.gz" ), path( "*.merge_output.vcf.gz.tbi" ), path( fasta ), path( fai ), emit: main
+   path "*.full_alignment.vcf.gz", emit: alignment
    path "*.log", emit: logs
 
    script:
    """
-   picard AddOrReplaceReadGroups \
-      I=${bamfile} O=${sample_id}.rg0.bam \
-      RGLB=${sample_id} RGPL="ONT" \
-      RGPU=${sample_id} RGSM=${sample_id}
-   samtools index ${sample_id}.rg0.bam
-
    THIS_DIR=\$(readlink -f \$(pwd))
    echo \$THIS_DIR
+   git clone https://github.com/nanoporetech/rerio.git
+   MODEL=r1041_e82_400bps_sup_v500
+   python rerio/download_model.py --clair3 rerio/clair3_models/\$MODEL"_model"
+
    singularity exec \
       -B ${launchDir} \
       ${clair3_image} \
       /opt/bin/run_clair3.sh \
-      --bam_fn=\$THIS_DIR/${sample_id}.rg0.bam \
+      --bam_fn=\$THIS_DIR/${bamfile} \
       --ref_fn=\$THIS_DIR/${fasta} \
       --sample_name=${sample_id}\
       --threads=${task.cpus} \
       --platform="ont" \
-      --model_path="/opt/models/r941_prom_hac_g360+g422" \
+      --model_path="\$THIS_DIR/rerio/clair3_models/\$MODEL" \
       --output=\$THIS_DIR/${sample_id}_clair3 \
       --no_phasing_for_fa \
       --include_all_ctgs \
-      --gvcf \
       --haploid_precise \
-      && rm ${sample_id}.rg0.bam
+      --enable_long_indel
 
-   mv ${sample_id}_clair3/merge_output.gvcf.gz ${sample_id}_clair3.merge_output.gvcf.gz
-   mv ${sample_id}_clair3/merge_output.gvcf.gz.tbi ${sample_id}_clair3.merge_output.gvcf.gz.tbi
+   mv ${sample_id}_clair3/merge_output.vcf.gz ${sample_id}_clair3.merge_output.vcf.gz
+   mv ${sample_id}_clair3/merge_output.vcf.gz.tbi ${sample_id}_clair3.merge_output.vcf.gz.tbi
    mv ${sample_id}_clair3/full_alignment.vcf.gz ${sample_id}_clair3.full_alignment.vcf.gz
    mv ${sample_id}_clair3/run_clair3.log ${sample_id}_clair3.log
    """
 }
 
-/*
- * GATK HTC
- */
-process COMBINE_GENOTYPE_GVCFS {
+process NORMALIZE_VCFS {
 
    label 'some_mem'
 
@@ -539,75 +531,53 @@ process COMBINE_GENOTYPE_GVCFS {
                mode: 'copy' )
 
    input:
-   tuple path( gvcfs ), path( idxs ), path( fasta ), path( fai ), path( dict ), path( gatk_image )
+   tuple val( sample_id ), path( vcf ), path( vcf_idx ), path( fasta ), path( fai )
 
    output:
-   tuple path( "*.genotyped.vcf" ), path( fasta ), path( fai ), path( dict ), path( gatk_image )
+   tuple path( "*.normalized.vcf.gz" ), path( "*.tbi" )
 
    script:
-   var gvcfs_ = gvcfs.each { it.getName() }.join(' --variant ')
    """
-   singularity exec \
-      -B ${launchDir} \
-      ${gatk_image} \
-      /gatk/gatk CombineGVCFs \
-      -R ${fasta} --variant ${gvcfs_} -O combined.g.vcf
-   singularity exec \
-      -B ${launchDir} \
-      ${gatk_image} \
-      /gatk/gatk GenotypeGVCFs \
-	   -R ${fasta} -V combined.g.vcf -O combined.genotyped.vcf
+   zcat ${vcf} \
+      | bcftools view -i 'GT="alt"' \
+      | bcftools norm -f ${fasta} -a -c e -m - \
+      | bcftools norm -aD \
+      | bcftools +setGT - -- -t a -n c:M \
+      | bcftools sort \
+      | bcftools view -i 'GT="A"' -Oz -o ${sample_id}.normalized.vcf.gz
+   bcftools index --tbi ${sample_id}.normalized.vcf.gz
    """
+
 }
 
-/*
- * GATK HTC
- */
-process FILTER_VAR {
+
+process MERGE_VCFS {
 
    label 'some_mem'
 
-   publishDir( path: tables_o, 
+   publishDir( path: processed_o, 
                mode: 'copy' )
 
    input:
-   tuple path( vcf ), path( fasta ), path( fai ), path( dict ), path( gatk_image )
+   path vcfs 
 
    output:
-   path "*.vcf"
+   path "merged.vcf"
 
    script:
    """
-   singularity exec \
-      -B ${launchDir} \
-      ${gatk_image} \
-      /gatk/gatk VariantFiltration \
-	   --filter-name "Auwera2013_QD" \
-	   --filter-expression "QD<2.0" \
-      --filter-name "Auwera2013_FS" \
-		--filter-expression "FS>60.0" \
-		--filter-name "Auwera2013_MQ" \
-		--filter-expression "MQ<40.0" \
-		--filter-name "Auwera2013_HaplotypeScore" \
-		--filter-expression "HaplotypeScore>13.0" \
-		--filter-name "Auwera2013_MappingQualityRankSum" \
-		--filter-expression "MappingQualityRankSum<-12.5" \
-		--filter-name "Auwera2013_ReadPosRankSum" \
-		--filter-expression "ReadPosRankSum<-8.0" \
-	   -R ${fasta} -V ${vcf} -O ${vcf.getSimpleName()}.filtered.vcf
+   bcftools merge --file-list <(ls -1 *.vcf.gz) -O v -o merged.vcf
    """
 }
 
-/*
- * GATK HTC
- */
+
 process SNPEFF {
 
    publishDir( path: tables_o, 
                mode: 'copy' )
 
    input:
-   path gvcf
+   path vcf
    val snpeff_url
    val snpeff_database
 
@@ -621,27 +591,26 @@ process SNPEFF {
    unzip snpEff_latest_core.zip
    java -jar snpEff/snpEff.jar download -v ${snpeff_database}
 
-   CHR_NAME=\$(grep -v '^#' ${gvcf} | cut -f1 | sort -u)
+   CHR_NAME=\$(grep -v '^#' ${vcf} | cut -f1 | sort -u)
    bcftools annotate \
       --rename-chrs <(printf \$CHR_NAME'\\tChromosome') \
-      ${gvcf} \
-      > ${gvcf}.1
-   mv ${gvcf}.1 ${gvcf}
+      ${vcf} \
+      > ${vcf}.1
+   mv ${vcf}.1 ${vcf}
 
    java -jar snpEff/snpEff.jar -v -d \
-      -o gatk \
       -ud 0 \
-	   -csvStats ${gvcf.getSimpleName()}.snpEff.csv \
-      -stats  ${gvcf.getSimpleName()}.snpEff.html \
-      ${params.snpeff_database} ${gvcf} \
-      > ${gvcf.getSimpleName()}.ann.vcf \
+	   -csvStats ${vcf.getSimpleName()}.snpEff.csv \
+      -stats  ${vcf.getSimpleName()}.snpEff.html \
+      ${params.snpeff_database} ${vcf} \
+      > ${vcf.getSimpleName()}.ann.vcf \
       && rm -r snpEff
 
    bcftools annotate \
       --rename-chrs <(printf 'Chromosome\\t'\$CHR_NAME) \
-      ${gvcf.getSimpleName()}.ann.vcf \
-      > ${gvcf.getSimpleName()}.ann.vcf.1
-   mv ${gvcf.getSimpleName()}.ann.vcf.1 ${gvcf.getSimpleName()}.ann.vcf
+      ${vcf.getSimpleName()}.ann.vcf \
+      > ${vcf.getSimpleName()}.ann.vcf.1
+   mv ${vcf.getSimpleName()}.ann.vcf.1 ${vcf.getSimpleName()}.ann.vcf
    """
 }
 
@@ -670,11 +639,10 @@ process TO_TABLE {
 		-F QUAL -F FILTER -F EFF -GF GT \
      	-O ${vcf.getSimpleName()}0.tsv
 
-   cat <(paste <(head -n1 ${vcf.getSimpleName()}0.tsv) <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
-       <(tail -n +2 ${vcf.getSimpleName()}0.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
+   cat <(paste <(head -n1 ${vcf.getSimpleName()}0.tsv) \
+      <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
+      <(tail -n +2 ${vcf.getSimpleName()}0.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
        > ${vcf.getSimpleName()}.tsv
-
-   #rm ${vcf.getSimpleName()}0.tsv
 
    NCOL=\$(( \$(head -n1 ${vcf.getSimpleName()}.tsv | awk -F'\\t' '{ print NF }') - 11 ))
    AWK_COMMAND='(\$(NF - 4) != \$(NF - 3)) { print }'
