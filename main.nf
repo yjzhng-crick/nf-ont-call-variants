@@ -481,9 +481,6 @@ process CLAIR3 {
 
    tag "${sample_id}" 
 
-   publishDir( path: processed_o, 
-               mode: 'copy' )
-
    input:
    tuple val( sample_id ), path( bamfile ), path( idx ), path( fasta ), path( fai ), path( dict ), path( clair3_image )
 
@@ -520,6 +517,7 @@ process CLAIR3 {
    mv ${sample_id}_clair3/merge_output.vcf.gz.tbi ${sample_id}_clair3.merge_output.vcf.gz.tbi
    mv ${sample_id}_clair3/full_alignment.vcf.gz ${sample_id}_clair3.full_alignment.vcf.gz
    mv ${sample_id}_clair3/run_clair3.log ${sample_id}_clair3.log
+   rm -rf rerio
    """
 }
 
@@ -554,9 +552,6 @@ process NORMALIZE_VCFS {
 process MERGE_VCFS {
 
    label 'some_mem'
-
-   publishDir( path: processed_o, 
-               mode: 'copy' )
 
    input:
    path vcfs 
@@ -600,6 +595,7 @@ process SNPEFF {
 
    java -jar snpEff/snpEff.jar -v -d \
       -ud 0 \
+      -o gatk \
 	   -csvStats ${vcf.getSimpleName()}.snpEff.csv \
       -stats  ${vcf.getSimpleName()}.snpEff.html \
       ${params.snpeff_database} ${vcf} \
@@ -614,9 +610,6 @@ process SNPEFF {
    """
 }
 
-/*
- * GATK HTC
- */
 process TO_TABLE {
 
    publishDir( path: tables_o, 
@@ -637,11 +630,11 @@ process TO_TABLE {
      	-V ${vcf} \
      	-F CHROM -F POS -F REF -F ALT -F TYPE \
 		-F QUAL -F FILTER -F EFF -GF GT \
-     	-O ${vcf.getSimpleName()}0.tsv
+     	-O ${vcf.getSimpleName()}.ann.tsv
 
-   cat <(paste <(head -n1 ${vcf.getSimpleName()}0.tsv) \
+   cat <(paste <(head -n1 ${vcf.getSimpleName()}.ann.tsv) \
       <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
-      <(tail -n +2 ${vcf.getSimpleName()}0.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
+      <(tail -n +2 ${vcf.getSimpleName()}.ann.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
        > ${vcf.getSimpleName()}.tsv
 
    NCOL=\$(( \$(head -n1 ${vcf.getSimpleName()}.tsv | awk -F'\\t' '{ print NF }') - 11 ))
