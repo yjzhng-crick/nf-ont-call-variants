@@ -150,16 +150,14 @@ workflow {
    TRIM_CUTADAPT.out.main.combine(BOWTIE2_INDEX.out) | BOWTIE2_ALIGN
 
    genome_ch | FAIDX 
-   genome_ch | PICARD_DICT 
 
    genome_ch.combine( FAIDX.out )
-            .combine( PICARD_DICT.out )
-            .set { fasta_faidx_dict }
+            .set { fasta_faidx }
    
    MINIMAP2_ALIGN.out.main | MOSDEPTH 
    MINIMAP2_ALIGN.out.main | SAMTOOLS_STATS
 
-   MINIMAP2_ALIGN.out.main.combine( fasta_faidx_dict )
+   MINIMAP2_ALIGN.out.main.combine( fasta_faidx )
                           .combine( LOAD_CLAIR3.out ) \
     | CLAIR3
 
@@ -169,9 +167,10 @@ workflow {
       | MERGE_VCFS 
 
    SNPEFF( MERGE_VCFS.out, 
-           Channel.value(params.snpeff_url), 
-           Channel.value(params.snpeff_database) )
-   SNPEFF.out.main.combine( LOAD_GATK.out ) | TO_TABLE
+           Channel.value( params.snpeff_url ), 
+           Channel.value( params.snpeff_database ) )
+   TO_TABLE( SNPEFF.out.main.combine( LOAD_GATK.out ),
+             Channel.value( params.snpeff_url ) )
 
    TRIM_CUTADAPT.out.logs.concat(
          FASTQC.out.logs,
@@ -453,27 +452,6 @@ process FAIDX {
    """
 }
 
-/*
- * 
- */
-process PICARD_DICT {
-
-   tag "${genome}"
-   
-   input:
-   path genome
-
-   output:
-   path "*.dict"
-
-   script:
-   """
-   picard CreateSequenceDictionary \
-      R=${genome} \
-      O=${genome.getBaseName()}.dict
-   """
-}
-
 
 process CLAIR3 {
 
@@ -482,7 +460,7 @@ process CLAIR3 {
    tag "${sample_id}" 
 
    input:
-   tuple val( sample_id ), path( bamfile ), path( idx ), path( fasta ), path( fai ), path( dict ), path( clair3_image )
+   tuple val( sample_id ), path( bamfile ), path( idx ), path( fasta ), path( fai ), path( clair3_image )
 
    output:
    tuple val( sample_id ), path( "*.merge_output.vcf.gz" ), path( "*.merge_output.vcf.gz.tbi" ), path( fasta ), path( fai ), emit: main
@@ -617,45 +595,41 @@ process TO_TABLE {
 
    input:
    tuple path( vcf ), path( gatk_image )
+   val snpeff_url
 
    output:
    path "*.tsv"
 
    script:
    """
-   singularity exec \
-      -B ${launchDir} \
-      ${gatk_image} \
-      /gatk/gatk VariantsToTable \
-     	-V ${vcf} \
-     	-F CHROM -F POS -F REF -F ALT -F TYPE \
-		-F QUAL -F FILTER -F EFF -GF GT \
-     	-O ${vcf.getSimpleName()}.ann.tsv
+   curl -v -L '${snpeff_url}' > snpEff_latest_core.zip
+   unzip snpEff_latest_core.zip
+   java -jar snpEff/SnpSift.jar filter --inverse "(GEN[ALL].GT = GEN[0].GT)" ${vcf} \
+      > ${vcf.getSimpleName()}.filtered.vcf
 
-   cat <(paste <(head -n1 ${vcf.getSimpleName()}.ann.tsv) \
-      <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
-      <(tail -n +2 ${vcf.getSimpleName()}.ann.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
-       > ${vcf.getSimpleName()}.tsv
+   java -jar snpEff/SnpSift.jar filter --inverse "(EFF[ALL].FUNCLASS = 'SILENT')" ${vcf.getSimpleName()}.filtered.vcf \
+      > ${vcf.getSimpleName()}.high-eff.vcf
 
-   NCOL=\$(( \$(head -n1 ${vcf.getSimpleName()}.tsv | awk -F'\\t' '{ print NF }') - 11 ))
-   AWK_COMMAND='(\$(NF - 4) != \$(NF - 3)) { print }'
-   
-   for i in \$(seq 2 \$NCOL)
+   set -x
+   for f in ${vcf.getSimpleName()}.filtered.vcf ${vcf.getSimpleName()}.high-eff.vcf
    do
-      AWK_COMMAND='(\$(NF - '\$(( \$i + 3 ))') != \$(NF - 3)) && '\$AWK_COMMAND
+      OUTFILE=\$(basename \$f .vcf).tsv
+      singularity exec \
+         -B ${launchDir} \
+         ${gatk_image} \
+         /gatk/gatk VariantsToTable \
+         -V \$f \
+         -F CHROM -F POS -F REF -F ALT -F TYPE \
+         -F QUAL -F FILTER -F EFF -GF GT \
+         -O \$OUTFILE
+      cat <(paste <(head -n1 \$OUTFILE) \
+         <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
+         <(tail -n +2 \$OUTFILE | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
+         > \$OUTFILE.1
+      mv \$OUTFILE.1 \$OUTFILE
    done
-
-   echo "\$AWK_COMMAND"
-
-   cat <(head -n1 ${vcf.getSimpleName()}.tsv) \
-       <(tail -n +2 ${vcf.getSimpleName()}.tsv \
-         | awk -F'\\t' "\$AWK_COMMAND") \
-       >  ${vcf.getSimpleName()}.filtered.tsv
-
-   cat <(head -n1 ${vcf.getSimpleName()}.filtered.tsv) \
-       <(tail -n +2 ${vcf.getSimpleName()}.filtered.tsv \
-         | grep -v '|SILENT|' | sort -k6 -n -r ) \
-      > ${vcf.getSimpleName()}.high-eff.tsv
+   
+   rm -r snpEff
    """
 }
 

@@ -12,7 +12,6 @@ dependencies:
     - bioconda::fastqc
     - bioconda::minimap2
     - bioconda::mosdepth
-    - bioconda::picard
     - bioconda::samtools
     - conda-forge::gnuplot
     - conda-forge::openjdk
