@@ -532,6 +532,8 @@ process CLAIR3 {
       --include_all_ctgs \
       --haploid_precise \
       --enable_long_indel
+   bcftools index -t merge_output.vcf.gz
+   
    """
 }
 
