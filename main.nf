@@ -129,7 +129,10 @@ workflow {
    Channel.of( params.snpeff_url ) | LOAD_SNPEFF
 
    sample_ch.map { tuple( it[0], it[2] ) } | FASTQC  
-   sample_ch.map { tuple( it[0], it[2] ) } | TRIM_CUTADAPT  // id, reads
+   TRIM_CUTADAPT(
+      sample_ch.map { tuple( it[0], it[2] ) },  // id, reads
+      Channel.value( params.min_length ),
+   )
 
    sample_ch
       .map { tuple( it[0], it[1] ) }  // id, acc
@@ -319,6 +322,7 @@ process TRIM_CUTADAPT {
 
    input:
    tuple val( sample_id ), path( reads )
+   val min_length
 
    output:
    tuple val( sample_id ), path( "*.trimmed.fastq.gz" ), emit: main
@@ -330,6 +334,7 @@ process TRIM_CUTADAPT {
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
+      --minimum-length ${min_length} \
 		-o ${sample_id}.trimmed.fastq.gz \
       --json=${sample_id}.cutadapt.json \
 		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
@@ -340,6 +345,7 @@ process TRIM_CUTADAPT {
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
+      --minimum-length ${min_length} \
 		-o ${sample_id}.trimmed.fastq.gz \
       --json=${sample_id}.cutadapt.json \
 		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
@@ -485,11 +491,14 @@ process MINIMAP2_ALIGN {
 
    script:
    """
-   minimap2 -aL --cs --M \
-      -a ${idx} <(zcat ${reads}) \
-      | samtools sort -@${task.cpus} -O bam -l 9 -o ${sample_id}.mapped.bam \
-      2> ${sample_id}.minimap2.log
-   samtools index ${sample_id}.mapped.bam
+   minimap2 -a -c --MD -x map-ont \
+      "${idx}" "${reads}" \
+   > minimap.sam \
+   2> "${sample_id}.minimap2.log"
+   samtools sort -@ ${task.cpus} -O bam -l 9 -o "${sample_id}.mapped.bam" minimap.sam
+   samtools index "${sample_id}.mapped.bam"
+   rm minimap.sam
+   
    """
 }
 
