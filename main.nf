@@ -514,7 +514,7 @@ process CLAIR3 {
    tuple val( sample_id ), path( bamfile ), path( idx ), val( accession ), path( fasta ), path( fai ), path( clair3_model )
 
    output:
-   tuple val( sample_id ), path( "merge_output.vcf.gz" ), path( "merge_output.vcf.gz.tbi" ), path( fasta ), path( fai ), emit: main
+   tuple val( sample_id ), path( "merge_output.vcf.gz" ), path( fasta ), path( fai ), emit: main
    path "full_alignment.vcf.gz", emit: alignment
    path "*.log", emit: logs
 
