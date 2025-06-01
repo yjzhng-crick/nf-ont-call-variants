@@ -27,8 +27,7 @@ For each sample:
 
 1. Quality Trim reads using `cutadapt`. 
 2. Map to genome FASTA using `minimap2`.
-3. Mark duplicates with `picard MarkDuplicates`.
-4. Call variants with `Clair3`.
+3. Call variants with `Clair3`.
 
 Then merge resulting GVCFs using GATK `CombineGVCFs`. With the combined variant calls:
 
@@ -135,7 +134,6 @@ Here is an example of the `nextflow.config` file:
 params {
     sample_sheet = "/path/to/sample-sheet.csv"
     inputs = "/path/to/inputs"
-
 }
 ```
 
@@ -145,8 +143,6 @@ Alternatively, you can provide the parameters on the command line:
 nextflow run scbirlab/nf-ont-call-variants \
     --sample_sheet /path/to/sample-sheet.csv \
     --inputs /path/to/inputs
-    --genome_fasta /path/to/1_ASM28329v1_genomic.fna \
-    --snpeff_database Mycobacterium_smegmatis_str_mc2_155_gca_000283295
 ``` 
 
 ### Sample sheet
