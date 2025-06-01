@@ -15,7 +15,6 @@ dependencies:
     - bioconda::samtools
     - conda-forge::gnuplot
     - conda-forge::openjdk
-    - conda-forge::singularity
     - pip:
         - 'cutadapt>=4.0'
         - 'multiqc>=1.21'

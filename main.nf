@@ -121,7 +121,6 @@ workflow {
       .set { sample_ch }  // id, acc, reads
 
    Channel.of( [ 
-      params.clair3_image, 
       params.clair3_model, 
       params.rerio_url ],
    ) | LOAD_CLAIR3
@@ -192,7 +191,6 @@ workflow {
       .combine( LOAD_SNPEFF.out )   // acc, vcf, fasta, gff, cds, protein, snpeff
       | SNPEFF
    SNPEFF.out.main
-      .combine( LOAD_GATK.out ) 
       | TO_TABLE
 
    TRIM_CUTADAPT.out.logs.concat(
@@ -207,22 +205,6 @@ workflow {
       .collect()
       | MULTIQC
 
-}
-
-process LOAD_GATK {
-
-   label 'some_mem'
-
-   input:
-   val gatk_image
-
-   output:
-   path "*.sif"
-
-   script:
-   """
-   singularity pull ${gatk_image}
-   """
 }
 
 process LOAD_SNPEFF {
@@ -248,16 +230,16 @@ process LOAD_CLAIR3 {
    label 'some_mem'
 
    input:
-   tuple val( clair3_image ), val( clair3_model ), val( rerio_url )
+   tuple val( clair3_model ), val( rerio_url )
 
    output:
-   tuple path( "*.sif" ), path( "rerio/clair3_models/${clair3_model}" )
+   tuple path( "rerio/clair3_models/${clair3_model}" )
 
    script:
    """
-   singularity pull ${clair3_image}
    git clone ${rerio_url}
    python rerio/download_model.py --clair3 rerio/clair3_models/${clair3_model}_model
+   
    """
 }
 
@@ -524,11 +506,13 @@ process FAIDX {
 
 process CLAIR3 {
 
-   tag "${sample_id}" 
+   tag "${sample_id}:${params.clair3_image}" 
    label 'big_cpu'
 
+   container params.clair3_image
+
    input:
-   tuple val( sample_id ), path( bamfile ), path( idx ), val( accession ), path( fasta ), path( fai ), path( clair3_image ), path( clair3_model )
+   tuple val( sample_id ), path( bamfile ), path( idx ), val( accession ), path( fasta ), path( fai ), path( clair3_model )
 
    output:
    tuple val( sample_id ), path( "merge_output.vcf.gz" ), path( "merge_output.vcf.gz.tbi" ), path( fasta ), path( fai ), emit: main
@@ -537,10 +521,7 @@ process CLAIR3 {
 
    script:
    """
-   singularity exec \
-      -B \$(readlink -f \$(pwd)/../../..) \
-      ${clair3_image} \
-      /opt/bin/run_clair3.sh \
+   /opt/bin/run_clair3.sh \
       --bam_fn="${bamfile}" \
       --ref_fn="${fasta}" \
       --sample_name=${sample_id}\
@@ -653,13 +634,15 @@ process SNPEFF {
 
 process TO_TABLE {
 
-   tag "${accession}"
+   tag "${accession}:${params.gatk_image}"
 
    publishDir( path: tables_o, 
                mode: 'copy' )
 
+   container params.gatk_image
+
    input:
-   tuple val( accession ), path( vcf ), path( gatk_image )
+   tuple val( accession ), path( vcf )
 
    output:
    path "*.tsv"
@@ -670,18 +653,17 @@ process TO_TABLE {
    for f in ${vcf}
    do
       OUTFILE=\$(basename \$f .vcf).tsv
-      singularity exec \
-         -B ${launchDir} \
-         ${gatk_image} \
-         /gatk/gatk VariantsToTable \
+      /gatk/gatk VariantsToTable \
          -V \$f \
          -F CHROM -F POS -F REF -F ALT -F TYPE \
          -F QUAL -F FILTER -F EFF -GF GT \
          -O \$OUTFILE
+
       cat <(paste <(head -n1 \$OUTFILE) \
          <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
          <(tail -n +2 \$OUTFILE | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
          > \$OUTFILE.1
+
       mv \$OUTFILE.1 \$OUTFILE
    done
    """
