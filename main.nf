@@ -520,6 +520,7 @@ process CLAIR3 {
 
    script:
    """
+   set -x
    /opt/bin/run_clair3.sh \
       --bam_fn="${bamfile}" \
       --ref_fn="${fasta}" \
@@ -532,7 +533,7 @@ process CLAIR3 {
       --include_all_ctgs \
       --haploid_precise \
       --enable_long_indel
-
+   ls -lah
    """
 }
 
@@ -548,7 +549,7 @@ process NORMALIZE_VCFS {
    tuple val( sample_id ), path( vcf ), path( fasta ), path( fai )
 
    output:
-   tuple val( sample_id ), path( "*.normalized.vcf.gz" ), path( "*.tbi" )
+   tuple val( sample_id ), path( "*.normalized.vcf.gz" )
 
    script:
    """
