@@ -1,3 +1,0 @@
-﻿sample_id,reads,genome_accession
-wt,reads_1/raw_reads.fastq.gz,GCF_000015005.1
-mutant,reads_2/raw_reads.fastq.gz,GCF_000015005.1
