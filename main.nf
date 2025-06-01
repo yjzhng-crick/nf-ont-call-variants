@@ -18,31 +18,21 @@ nextflow.enable.dsl=2
 */
 if ( params.help ) {
    println """\
-         S C B I R   N A N O P O R E  s b R N A - S E Q   P I P E L I N E
-         ================================================================
-         Nextflow pipeline to process raw Nanopore POD5 files from 
-         multiple bacterial samples into a gene x cell count table. Applies 
-         duplex basecalling, therefore requires v10.4 chemistry.
+         S C B I R   N A N O P O R E  V A R I A N T   C A L L I N G   P I P E L I N E
+         ============================================================================
+         Nextflow pipeline to call variants from Nanopore FASTQ files from bacterial clones 
+         relative to a wildtype control.
 
          Usage:
-            nextflow run sbcirlab/nf-ont-sbrnaseq --sample_sheet <csv> --data_dir <dir> --genome_fasta_dir <dir> --genome_gff_dir <dir> --guppy_path <path>
-            nextflow run sbcirlab/nf-ont-sbrnaseq -c <config-file>
+            nextflow run scbirlab/nf-ont-call-variants --sample_sheet <csv> --inputs <dir>
+            nextflow run scbirlab/nf-ont-call-variants -c <config-file>
 
          Required parameters:
             sample_sheet      Path to a CSV with information about the samples 
                                  and FASTQ files to be processed
-            gatk_path         Path to GATK executable.
-            picard_path       Path to Picard executable
-            snpeff_path       Path to snpEff executable
-            genome_fasta      Path to reference genome FASTA
-            snpeff_database   Name of snpEff database to use for annotation.
-                                 This should be derived from the same assembly as 
-                                 `genome_fasta`. You can get a list of databases 
-                                 using `java -jar snpEff database`. Database names 
-                                 often end in the assembly name, such as `gca_000015005`, 
-                                 which you can check matches your `genome_fasta`.
 
-         Optional parameters (with defaults):   
+         Optional parameters (with defaults):  
+            inputs             Directory containing inputs. Default: "./inputs".
             trim_qual = 10     For `cutadapt`, the minimum Phred score for trimming 3' calls
             min_length = 10    For `cutadapt`, the minimum trimmed length of a read. Shorter 
                                  reads will be discarded.
@@ -61,24 +51,8 @@ if ( params.help ) {
 if ( !params.sample_sheet ) {
    throw new Exception("!!! PARAMETER MISSING: Please provide a path to sample_sheet")
 }
-if ( !params.gatk_path ) {
-   throw new Exception("!!! PARAMETER MISSING: Please provide a gatk_path")
-}
-if ( !params.picard_path ) {
-   throw new Exception("!!! PARAMETER MISSING: Please provide a picard_path")
-}
-if ( !params.snpeff_path ) {
-   throw new Exception("!!! PARAMETER MISSING: Please provide a snpeff_path")
-}
-if ( !params.genome_fasta ) {
-   throw new Exception("!!! PARAMETER MISSING: Please provide a path to genome_fasta")
-}
-if ( !params.snpeff_database ) {
-   throw new Exception("!!! PARAMETER MISSING: Please provide a snpeff_database")
-}
 
-wd = file(params.sample_sheet)
-working_dir = wd.getParent()
+working_dir = params.outputs
 
 processed_o = "${working_dir}/processed"
 tables_o = "${working_dir}/tables"
@@ -88,13 +62,13 @@ log.info """\
          S C B I R   V A R I A N T   C A L L I N G   P I P E L I N E
          ===========================================================
          software
-            GATK           : ${params.gatk_path}
-            Picard         : ${params.picard_path}
-            snpEff         : ${params.snpeff_path}
+            GATK           : ${params.gatk_image}
+            Clair3         : ${params.clair3_image}
+            snpEff         : ${params.snpeff_url}
          inputs
+            input dir.     : ${params.inputs}
             sample sheet   : ${params.sample_sheet}
-         genome locations
-            FASTA          : ${params.genome_fasta}
+         genome 
             SnpEff organism: ${params.snpeff_database}
          trimming 
             quality        : ${params.trim_qual}
@@ -117,23 +91,6 @@ dirs_to_make.each {
    println file(it).mkdirs() ? "OK" : "Cannot create directory: ${it}"
 }
 
-
-/*
-========================================================================================
-   Create Channels
-========================================================================================
-*/
-
-csv_ch = Channel.fromPath( params.sample_sheet, 
-                           checkIfExists: true )
-                .splitCsv( header: true )
-
-sample_ch = csv_ch.map { tuple( it.sample_id,
-                                file( it.reads ) ) }
-
-genome_ch = Channel.fromPath( params.genome_fasta, 
-                              checkIfExists: true )
-
 /*
 ========================================================================================
    MAIN Workflow
@@ -142,48 +99,165 @@ genome_ch = Channel.fromPath( params.genome_fasta,
 
 workflow {
 
-   sample_ch | FASTQC
-   sample_ch | TRIM_CUTADAPT
+   Channel.fromPath( params.sample_sheet, 
+                     checkIfExists: true )
+          .splitCsv( header: true )
+          .set { csv_ch }
 
-   genome_ch | MINIMAP2_INDEX 
-   TRIM_CUTADAPT.out.main.combine(MINIMAP2_INDEX.out) | MINIMAP2_ALIGN
+   csv_ch
+      .map { it.genome_accession }
+      .unique()
+      | DOWNLOAD_GENOME  // acc, fasta, gff, cds, protein
 
-   genome_ch | BOWTIE2_INDEX 
-   TRIM_CUTADAPT.out.main.combine(BOWTIE2_INDEX.out) | BOWTIE2_ALIGN
+   csv_ch
+      .map { tuple( 
+         it.sample_id,
+         it.genome_accession,
+         file( 
+            "${params.inputs}/${it.reads}", 
+            checkIfExists: true,
+         ),
+      ) }
+      .set { sample_ch }  // id, acc, reads
 
-   genome_ch | FAIDX 
-   genome_ch | PICARD_DICT 
+   Channel.of( [ 
+      params.clair3_model, 
+      params.rerio_url 
+   ]) | LOAD_CLAIR3
+   Channel.of( params.snpeff_url ) | LOAD_SNPEFF
 
-   genome_ch.combine(FAIDX.out)\
-            .combine(PICARD_DICT.out) \
-            .set { fasta_faidx_dict }
+   sample_ch.map { tuple( it[0], it[2] ) } | FASTQC  
+   TRIM_CUTADAPT(
+      sample_ch.map { tuple( it[0], it[2] ) },  // id, reads
+      Channel.value( params.min_length ),
+   )
+
+   sample_ch
+      .map { tuple( it[0], it[1] ) }  // id, acc
+      .join( 
+         TRIM_CUTADAPT.out.main,
+         by: 0,
+      )  // id, acc, reads
+      .map { tuple( it[1], it[0], it[2] ) }  // acc, id, reads
+      .set { trimmed_reads }
+
+   DOWNLOAD_GENOME.out
+      .map { tuple( it[0], it[1] ) } 
+      | MINIMAP2_INDEX   // acc, minimap-idx
+   trimmed_reads
+      .combine( MINIMAP2_INDEX.out, by: 0 )  // acc, id, reads, minimap-idx
+      .map { tuple( it[1], it[2], it[3] ) } // id, reads, minimap-idx
+      | MINIMAP2_ALIGN  // id, bam, bai
+
+   DOWNLOAD_GENOME.out
+      .map { tuple( it[0], it[1] ) } 
+      | BOWTIE2_INDEX   // acc, bowtie-idx-base, bowtie-idx
+   trimmed_reads
+      .combine( BOWTIE2_INDEX.out, by: 0 )  // acc, id, reads, bowtie-idx-base, bowtie-idx
+      .map { tuple( it[1], it[2], it[3], it[4] ) }  // id, reads, bowtie-idx-base, bowtie-idx
+      | BOWTIE2_ALIGN  // id, bam, bai
+
+   DOWNLOAD_GENOME.out.map { tuple( it[0], it[1] ) } 
+      | FAIDX   // acc, fai
+
+   DOWNLOAD_GENOME.out
+      .map { tuple( it[0], it[1] ) }  // acc, fasta
+      .combine( FAIDX.out, by: 0 )    // acc, fasta, fai
+      .set { fasta_faidx }
    
-   MINIMAP2_ALIGN.out.main | MARK_DUPES 
-   MARK_DUPES.out.main | SAMTOOLS_STATS
+   MINIMAP2_ALIGN.out.main | MOSDEPTH 
+   MINIMAP2_ALIGN.out.main | SAMTOOLS_STATS
 
-   MARK_DUPES.out.main.combine(fasta_faidx_dict) \
-      | HAPLOTYPE_CALLER
+   MINIMAP2_ALIGN.out.main     // id, bam, bai
+      .combine( fasta_faidx )  // id, bam, bai, acc, fasta, fai
+      .combine( LOAD_CLAIR3.out )
+      | CLAIR3
 
-   HAPLOTYPE_CALLER.out.collect { it[1] } \
-                   .map { [it] }
-                   .combine(fasta_faidx_dict) \
-      | COMBINE_GENOTYPE_GVCFS | FILTER_VAR
+   CLAIR3.out.main | NORMALIZE_VCFS
 
-   FILTER_VAR.out | SNPEFF
-   SNPEFF.out.main | TO_TABLE
+   sample_ch
+      .map { tuple( it[0], it[1] ) }  // id, acc
+      .join( 
+         NORMALIZE_VCFS.out,
+         by: 0,
+      )  // id, acc, vcf, idx
+      .groupTuple( by: 1 )  // [id,...], acc, [vcf, ...]
+      .map { tuple( it[1], it[2] ) }  // acc, [vcf, ...]
+      | MERGE_VCFS  // acc, vcf
+
+   MERGE_VCFS.out
+      .combine( DOWNLOAD_GENOME.out, by: 0 )  // acc, vcf, fasta, gff, cds, protein
+      .combine( LOAD_SNPEFF.out )   // acc, vcf, fasta, gff, cds, protein, snpeff
+      | SNPEFF
+   SNPEFF.out.main
+      | TO_TABLE
 
    TRIM_CUTADAPT.out.logs.concat(
          FASTQC.out.logs,
          MINIMAP2_ALIGN.out.logs,
          BOWTIE2_ALIGN.out.logs,
-         MARK_DUPES.out.logs,
          SAMTOOLS_STATS.out.logs,
-         SNPEFF.out.logs)
+         SNPEFF.out.logs,
+      )
       .flatten()
       .unique()
-      .collect() \
+      .collect()
       | MULTIQC
 
+}
+
+process LOAD_SNPEFF {
+
+   label 'some_mem'
+
+   input:
+   val snpeff_url
+
+   output:
+   path "snpEff"
+
+   script:
+   """
+   curl -v -L '${snpeff_url}' > snpEff_latest_core.zip
+   unzip snpEff_latest_core.zip
+   """
+}
+
+process LOAD_CLAIR3 {
+
+   tag "${clair3_model}"
+   label 'some_mem'
+
+   input:
+   tuple val( clair3_model ), val( rerio_url )
+
+   output:
+   path "rerio/clair3_models/${clair3_model}"
+
+   script:
+   """
+   git clone ${rerio_url}
+   python rerio/download_model.py --clair3 rerio/clair3_models/${clair3_model}_model
+
+   """
+}
+
+process DOWNLOAD_GENOME {
+
+   tag "${accession}"
+   label 'some_mem'
+
+   input:
+   val accession
+
+   output:
+   tuple val( accession ), path( "ncbi_dataset/data/*/${accession}_*_genomic.fna" ), path( "ncbi_dataset/data/*/*.gff" ), path( "ncbi_dataset/data/*/cds_from_genomic.fna" ), path( "ncbi_dataset/data/*/protein.faa" )
+
+   script:
+   """
+   wget "https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/${accession}/download?include_annotation_type=GENOME_FASTA&include_annotation_type=GENOME_GFF&include_annotation_type=RNA_FASTA&include_annotation_type=CDS_FASTA&include_annotation_type=PROT_FASTA&include_annotation_type=SEQUENCE_REPORT&hydrated=FULLY_HYDRATED" -O genome-out
+   unzip genome-out ncbi_dataset/data/${accession}/{${accession}_*_genomic.fna,*.gff,cds_from_genomic.fna,protein.faa}
+   """
 }
 
 /* 
@@ -191,7 +265,7 @@ workflow {
  */
 process FASTQC {
 
-   memory '32GB'
+   label 'med_mem'
 
    tag "${sample_id}"
 
@@ -204,7 +278,13 @@ process FASTQC {
    script:
    """
    zcat ${reads} > ${sample_id}.fastq
-   fastqc --noextract --memory 10000 --threads 4 ${sample_id}.fastq
+   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
+   rm ${sample_id}.fastq
+   """
+   stub:
+   """
+   zcat ${reads} | head -n1000 > ${sample_id}.fastq
+   fastqc --noextract --memory 10000 --threads ${task.cpus} ${sample_id}.fastq
    rm ${sample_id}.fastq
    """
 
@@ -219,24 +299,37 @@ process TRIM_CUTADAPT {
 
    publishDir( processed_o, 
                mode: 'copy',
-               pattern: "*.{log,json}" )
+               pattern: "*.log" )
 
    input:
    tuple val( sample_id ), path( reads )
+   val min_length
 
    output:
    tuple val( sample_id ), path( "*.trimmed.fastq.gz" ), emit: main
-   tuple path( "*.log" ),  path( "*.json" ), emit: logs
+   path "*.log" , emit: logs
 
    script:
    """
-   ln -s ${reads} ${sample_id}.fastq.qz
+   ln -s ${reads} ${sample_id}.fastq.gz
    cutadapt \
 		-q ${params.trim_qual},${params.trim_qual} \
 		--report=full \
+      --minimum-length ${min_length} \
 		-o ${sample_id}.trimmed.fastq.gz \
       --json=${sample_id}.cutadapt.json \
-		${sample_id}.fastq.qz > ${sample_id}.cutadapt.log
+		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
+   """
+   stub:
+   """
+   zcat ${reads} | head -n1000 | gzip --best > ${sample_id}.fastq.gz
+   cutadapt \
+		-q ${params.trim_qual},${params.trim_qual} \
+		--report=full \
+      --minimum-length ${min_length} \
+		-o ${sample_id}.trimmed.fastq.gz \
+      --json=${sample_id}.cutadapt.json \
+		${sample_id}.fastq.gz > ${sample_id}.cutadapt.log
    """
 }
 
@@ -245,13 +338,13 @@ process TRIM_CUTADAPT {
  */
 process BOWTIE2_INDEX {
    
-   tag "${genome}"
+   tag "${accession}"
    
    input:
-   path genome
+   tuple val( accession ), path( genome )
 
    output:
-   tuple val( "${genome.getBaseName()}" ), path( "*.bt2" )  
+   tuple val( accession ), val( "${genome.getBaseName()}" ), path( "*.bt2" )  
 
    script:
    """
@@ -264,7 +357,7 @@ process BOWTIE2_INDEX {
  */
 process BOWTIE2_ALIGN {
 
-   memory '32GB'
+   label 'med_mem'
    errorStrategy 'ignore'
 
    tag "${sample_id}"
@@ -280,13 +373,40 @@ process BOWTIE2_ALIGN {
    """
    bowtie2 \
       -x ${genome_idx_base} \
-      --rdg 10,10 --very-sensitive \
+      --rdg 10,10 \
+      --very-sensitive \
       --trim-to 3:2500 \
-      -U ${reads} -S ${sample_id}.mapped.sam 2> ${sample_id}.bowtie2.log
-   samtools sort ${sample_id}.mapped.sam \
+      -U ${reads} \
+      2> ${sample_id}.bowtie2.log \
+      | samtools sort - \
       -O bam -l 9 -o ${sample_id}.mapped.bam
-   samtools index ${sample_id}.mapped.bam
-   rm ${sample_id}.mapped.sam
+   samtools index *.mapped.bam
+   """
+}
+
+/*
+ * Get alignment stats
+ */
+process MOSDEPTH {
+
+   tag "${sample_id}"
+
+   publishDir( path: tables_o, 
+               mode: 'copy' )
+
+   input:
+   tuple val( sample_id ), path( bamfile ), path( idx )
+
+   output:
+   path "*.txt", emit: logs
+   path "*.html", emit: plots
+
+   script:
+   """
+   mosdepth ${bamfile.getBaseName()} ${bamfile}
+   git clone https://github.com/brentp/mosdepth.git && python mosdepth/scripts/plot-dist.py ${bamfile.getBaseName()}.mosdepth.global.dist.txt
+   mv dist.html ${bamfile.getBaseName()}.mosdepth.global.dist.html
+   rm -r mosdepth
    """
 }
 
@@ -301,14 +421,16 @@ process SAMTOOLS_STATS {
                mode: 'copy' )
 
    input:
-   tuple val( sample_id ), path( bamfile ), val( idx )
+   tuple val( sample_id ), path( bamfile ), path( idx )
 
    output:
    path "*.stats", emit: logs
+   path "*.png", emit: plots
 
    script:
    """
    samtools stats ${bamfile} > ${bamfile.getBaseName()}.stats
+   plot-bamstats -p ${bamfile.getBaseName()}_plot ${bamfile.getBaseName()}.stats
    """
 }
 
@@ -317,13 +439,13 @@ process SAMTOOLS_STATS {
  */
 process MINIMAP2_INDEX {
 
-   tag "${genome}"
+   tag "${accession}"
    
    input:
-   path genome
+   tuple val( accession ), path( genome )
 
    output:
-   path( "*.mmi" )
+   tuple val( accession ), path( "*.mmi" )
 
    script:
    """
@@ -338,6 +460,9 @@ process MINIMAP2_ALIGN {
 
    tag "${sample_id}" 
 
+   publishDir( path: processed_o, 
+               mode: 'copy' )
+
    input:
    tuple val( sample_id ), path( reads ), path( idx )
 
@@ -347,43 +472,14 @@ process MINIMAP2_ALIGN {
 
    script:
    """
-   minimap2 -y --eqx -Y \
-      --sam-hit-only --no-end-flt --sr --frag=yes \
-      -F 3000 \
-      -a ${idx} <(zcat ${reads}) \
-      -o ${sample_id}.mapped.sam 2> ${sample_id}.minimap2.log
-   samtools sort ${sample_id}.mapped.sam \
-      -O bam -l 9 -o ${sample_id}.mapped.bam
-   samtools index ${sample_id}.mapped.bam
-   rm ${sample_id}.mapped.sam
-   """
-}
-
-/*
- * Picard Mark Duplicates
- */
-process MARK_DUPES {
-
-   tag "${sample_id}" 
-
-   publishDir( path: processed_o, 
-               mode: 'copy', 
-               pattern: "*.marked-dupes.bam" )
-
-   input:
-   tuple val( sample_id ), path( bamfile ), path( idx )
-
-   output:
-   tuple val( sample_id ), path( "*.bam" ), path( "*.bai" ), emit: main
-   path "*.txt", emit: logs
-
-   script:
-   """
-   picard MarkDuplicates \
-      I=${bamfile} \
-      O=${bamfile.getSimpleName()}.marked-dupes.bam \
-      M=${bamfile.getSimpleName()}.marked-dupes.txt
-   samtools index ${bamfile.getSimpleName()}.marked-dupes.bam
+   minimap2 -a -c --MD -x map-ont \
+      "${idx}" "${reads}" \
+   > minimap.sam \
+   2> "${sample_id}.minimap2.log"
+   samtools sort -@ ${task.cpus} -O bam -l 9 -o "${sample_id}.mapped.bam" minimap.sam
+   samtools index "${sample_id}.mapped.bam"
+   rm minimap.sam
+   
    """
 }
 
@@ -392,13 +488,13 @@ process MARK_DUPES {
  */
 process FAIDX {
 
-   tag "${genome}"
+   tag "${accession}"
    
    input:
-   path genome
+   tuple val( accession ), path( genome )
 
    output:
-   path( "*.fai" )
+   tuple val( accession ), path( "*.fai" ) 
 
    script:
    """
@@ -406,218 +502,180 @@ process FAIDX {
    """
 }
 
-/*
- * 
- */
-process PICARD_DICT {
 
-   tag "${genome}"
-   
+process CLAIR3 {
+
+   tag "${sample_id}:${params.clair3_image}" 
+   label 'big_cpu'
+
+   container params.clair3_image
+
    input:
-   path genome
+   tuple val( sample_id ), path( bamfile ), path( idx ), val( accession ), path( fasta ), path( fai ), path( clair3_model )
 
    output:
-   path( "*.dict" )
+   tuple val( sample_id ), path( "merge_output.vcf.gz" ), path( fasta ), path( fai ), emit: main
+   path "full_alignment.vcf.gz", emit: alignment
+   path "*.log", emit: logs
 
    script:
    """
-   picard CreateSequenceDictionary \
-      R=${genome} \
-      O=${genome.getBaseName()}.dict
+   set -x
+   /opt/bin/run_clair3.sh \
+      --bam_fn="${bamfile}" \
+      --ref_fn="${fasta}" \
+      --sample_name=${sample_id}\
+      --threads=${task.cpus} \
+      --platform="ont" \
+      --model_path="${clair3_model}" \
+      --output="." \
+      --no_phasing_for_fa \
+      --include_all_ctgs \
+      --haploid_precise \
+      --enable_long_indel
+   ls -lah
    """
 }
 
-/*
- * GATK HTC
- */
-process HAPLOTYPE_CALLER {
+process NORMALIZE_VCFS {
 
    tag "${sample_id}" 
+   label 'some_mem'
 
    publishDir( path: processed_o, 
                mode: 'copy' )
 
    input:
-   tuple val( sample_id ), path( bamfile ), path( idx ), path( fasta ), path( fai ), path( dict )
+   tuple val( sample_id ), path( vcf ), path( fasta ), path( fai )
 
    output:
-   tuple val( sample_id ), path( "*.g.vcf" ), path( "*.htc.bam" )
+   tuple val( sample_id ), path( "*.normalized.vcf.gz" )
 
    script:
    """
-   picard AddOrReplaceReadGroups \
-      I=${bamfile} O=${sample_id}.rg0.bam \
-      RGLB=${sample_id} RGPL="ONT" \
-      RGPU=${sample_id} RGSM=${sample_id}
-
-   # hack to deal with tp:A:P tag from minimap2 not compatible with GATK
-   samtools view -h ${sample_id}.rg0.bam | cut -f23 --complement | samtools sort - -l9 -o ${sample_id}.rg.bam
-   samtools index ${sample_id}.rg.bam
-
-   ${params.gatk_path} HaplotypeCaller \
-      -R ${fasta} \
-      -ERC GVCF \
-      -ploidy 1 \
-      --pcr-indel-model NONE \
-      -A AlleleFraction \
-      -A BaseQuality \
-      -I ${sample_id}.rg.bam \
-      -O ${sample_id}.g.vcf \
-      -bamout ${sample_id}.htc.bam
-
-   rm ${sample_id}.rg0.bam
+   bcftools index -t ${vcf}
+   zcat ${vcf} \
+      | bcftools view -i 'GT="alt"' \
+      | bcftools norm -f ${fasta} -a -c e -m - \
+      | bcftools norm -aD \
+      | bcftools +setGT - -- -t a -n c:M \
+      | bcftools sort \
+      | bcftools view -i 'GT="A"' -Oz -o ${sample_id}.normalized.vcf.gz
+   bcftools index --tbi ${sample_id}.normalized.vcf.gz
    """
+
 }
 
-/*
- * GATK HTC
- */
-process COMBINE_GENOTYPE_GVCFS {
 
-   memory '16GB'
+process MERGE_VCFS {
 
-   publishDir( path: processed_o, 
-               mode: 'copy' )
+   tag "${accession}"
+
+   label 'some_mem'
 
    input:
-   tuple path( gvcfs ), path( fasta ), path( fai ), path( dict )
+   tuple val( accession ), path( vcfs )
 
    output:
-   tuple path( "*.genotyped.vcf" ), path( fasta ), path( fai ), path( dict )
-
-   script:
-   var gvcfs_ = gvcfs.each { it.getName() }.join(' --variant ')
-   """
-   ${params.gatk_path} CombineGVCFs \
-	    -R ${fasta} --variant ${gvcfs_} -O combined.g.vcf
-   ${params.gatk_path} GenotypeGVCFs \
-	    -R ${fasta} -V combined.g.vcf -O combined.genotyped.vcf
-   """
-}
-
-/*
- * GATK HTC
- */
-process FILTER_VAR {
-
-   memory '16GB'
-
-   publishDir( path: tables_o, 
-               mode: 'copy' )
-
-   input:
-   tuple path( vcf ), path( fasta ), path( fai ), path( dict )
-
-   output:
-   path( "*.vcf" )
+   tuple val( accession ), path( "*-merged.vcf" )
 
    script:
    """
-   ${params.gatk_path} \
-      VariantFiltration \
-	   --filter-name "Auwera2013_QD" \
-	   --filter-expression "QD<2.0" \
-      --filter-name "Auwera2013_FS" \
-		--filter-expression "FS>60.0" \
-		--filter-name "Auwera2013_MQ" \
-		--filter-expression "MQ<40.0" \
-		--filter-name "Auwera2013_HaplotypeScore" \
-		--filter-expression "HaplotypeScore>13.0" \
-		--filter-name "Auwera2013_MappingQualityRankSum" \
-		--filter-expression "MappingQualityRankSum<-12.5" \
-		--filter-name "Auwera2013_ReadPosRankSum" \
-		--filter-expression "ReadPosRankSum<-8.0" \
-	    -R ${fasta} -V ${vcf} -O ${vcf.getSimpleName()}.filtered.vcf
+   for vcf in ${vcfs}
+   do
+      bcftools index -t "\$vcf"
+   done
+   bcftools merge --file-list <(ls -1 *.vcf.gz) -O v -o ${accession}-merged.vcf
    """
 }
 
-/*
- * GATK HTC
- */
+
 process SNPEFF {
 
+   tag "${accession}:${snpeff}"
+
    publishDir( path: tables_o, 
                mode: 'copy' )
 
    input:
-   path( gvcf )
+   tuple val( accession ), path( vcf ), path( fasta ), path( gff ), path( cds ), path( protein ), path( snpeff )
 
    output:
-   path( "*.ann.vcf" ), emit: main
+   tuple val( accession ), path( "*.{filtered,high-eff}.vcf" ), emit: main
    tuple path( "*.csv" ), path( "*.html" ), emit: logs
 
    script:
    """
-   CHR_NAME=\$(grep -v '^#' ${gvcf} | cut -f1 | sort -u)
-   bcftools annotate \
-      --rename-chrs <(printf \$CHR_NAME'\\tChromosome') \
-      ${gvcf} \
-      > ${gvcf}.1
-   mv ${gvcf}.1 ${gvcf}
+   SNPEFF_HOME=${snpeff}
+   DB_LOC=\$SNPEFF_HOME/data/${accession}
+   CHR_NAME=\$(grep -v '^#' ${vcf} | cut -f1 | sort -u)
 
-   java -jar ${params.snpeff_path} -v -d \
-      -o gatk \
+   if [ ! -e \$DB_LOC/snpEffectPredictor.bin ]
+   then
+      mkdir -p \$DB_LOC
+      cp --remove-destination ${gff} \$DB_LOC/genes.gff
+      cp --remove-destination ${fasta} \$DB_LOC/sequences.fa
+      cp --remove-destination ${protein} \$DB_LOC/protein.fa
+      echo '# New genome, version ${accession}' >> ${snpeff}/snpEff.config
+      echo '${accession}.genome : ${accession}' >> ${snpeff}/snpEff.config
+      echo '${accession}.codonTable : Bacterial_and_Plant_Plastid' >> ${snpeff}/snpEff.config
+      java -jar ${snpeff}/snpEff.jar build -noCheckCds -gff3 -v ${accession}
+   fi
+
+   java -jar ${snpeff}/snpEff.jar -v -d \
       -ud 0 \
-	   -csvStats ${gvcf.getSimpleName()}.snpEff.csv \
-      -stats  ${gvcf.getSimpleName()}.snpEff.html \
-      ${params.snpeff_database} ${gvcf} \
-      > ${gvcf.getSimpleName()}.ann.vcf
+      -o gatk \
+	   -csvStats ${vcf.getSimpleName()}.snpEff.csv \
+      -stats ${vcf.getSimpleName()}.snpEff.html \
+      ${accession} ${vcf} \
+      > ${vcf.getSimpleName()}.ann.vcf
 
-   bcftools annotate \
-      --rename-chrs <(printf 'Chromosome\\t'\$CHR_NAME) \
-      ${gvcf.getSimpleName()}.ann.vcf \
-      > ${gvcf.getSimpleName()}.ann.vcf.1
-   mv ${gvcf.getSimpleName()}.ann.vcf.1 ${gvcf.getSimpleName()}.ann.vcf
+   # Remove lines where all genotypes are the same
+   java -jar ${snpeff}/SnpSift.jar filter --inverse "(GEN[ALL].GT = GEN[0].GT)" \
+      ${vcf.getSimpleName()}.ann.vcf \
+      > ${vcf.getSimpleName()}.filtered.vcf
+
+   # Remove silent mutants
+   java -jar ${snpeff}/SnpSift.jar filter --inverse "(EFF[ALL].FUNCLASS = 'SILENT')" \
+      ${vcf.getSimpleName()}.filtered.vcf \
+      > ${vcf.getSimpleName()}.high-eff.vcf
    """
 }
 
-/*
- * GATK HTC
- */
 process TO_TABLE {
+
+   tag "${accession}:${params.gatk_image}"
 
    publishDir( path: tables_o, 
                mode: 'copy' )
 
+   container params.gatk_image
+
    input:
-   path( vcf )
+   tuple val( accession ), path( vcf )
 
    output:
-   path( "*.tsv" )
+   path "*.tsv"
 
    script:
    """
-   ${params.gatk_path} VariantsToTable \
-     	-V ${vcf} \
-     	-F CHROM -F POS -F REF -F ALT -F TYPE \
-		-F QUAL -F FILTER -F EFF -GF GT \
-     	-O ${vcf.getSimpleName()}0.tsv
-
-   cat <(paste <(head -n1 ${vcf.getSimpleName()}0.tsv) <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
-       <(tail -n +2 ${vcf.getSimpleName()}0.tsv | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
-       > ${vcf.getSimpleName()}.tsv
-
-   #rm ${vcf.getSimpleName()}0.tsv
-
-   NCOL=\$(( \$(head -n1 ${vcf.getSimpleName()}.tsv | awk -F'\\t' '{ print NF }') - 11 ))
-   AWK_COMMAND='(\$(NF - 4) != \$(NF - 3)) { print }'
-   
-   for i in \$(seq 2 \$NCOL)
+   set -x
+   for f in ${vcf}
    do
-      AWK_COMMAND='(\$(NF - '\$(( \$i + 3 ))') != \$(NF - 3)) && '\$AWK_COMMAND
+      OUTFILE=\$(basename \$f .vcf).tsv
+      /gatk/gatk VariantsToTable \
+         -V \$f \
+         -F CHROM -F POS -F REF -F ALT -F TYPE \
+         -F QUAL -F FILTER -F EFF -GF GT \
+         -O \$OUTFILE
+
+      cat <(paste <(head -n1 \$OUTFILE) \
+         <(printf 'Gene_Name\\tAmino_Acid_Change\\tFunctional Class')) \
+         <(tail -n +2 \$OUTFILE | awk -F'|' 'BEGIN{OFS="\t"}{ print \$0,\$5,\$4,\$2 }') \
+         > \$OUTFILE.1
+
+      mv \$OUTFILE.1 \$OUTFILE
    done
-
-   echo "\$AWK_COMMAND"
-
-   cat <(head -n1 ${vcf.getSimpleName()}.tsv) \
-       <(tail -n +2 ${vcf.getSimpleName()}.tsv \
-         | awk -F'\\t' "\$AWK_COMMAND") \
-       >  ${vcf.getSimpleName()}.filtered.tsv
-
-   cat <(head -n1 ${vcf.getSimpleName()}.filtered.tsv) \
-       <(tail -n +2 ${vcf.getSimpleName()}.filtered.tsv \
-         | grep -v '|SILENT|' | sort -k6 -n -r ) \
-      > ${vcf.getSimpleName()}.high-eff.tsv
    """
 }
 
