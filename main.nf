@@ -181,8 +181,8 @@ workflow {
          NORMALIZE_VCFS.out,
          by: 0,
       )  // id, acc, vcf, idx
-      .groupTuple( by: 1 )  // [id,...], acc, [vcf, ...], [idx, ...]
-      .map { tuple( it[1], it[2], it[3] ) }  // acc, [vcf, ...], [idx, ...]
+      .groupTuple( by: 1 )  // [id,...], acc, [vcf, ...]
+      .map { tuple( it[1], it[2] ) }  // acc, [vcf, ...]
       | MERGE_VCFS  // acc, vcf
 
    MERGE_VCFS.out
@@ -569,6 +569,8 @@ process NORMALIZE_VCFS {
 
 process MERGE_VCFS {
 
+   tag "${accession}"
+
    label 'some_mem'
 
    input:
@@ -589,6 +591,8 @@ process MERGE_VCFS {
 
 
 process SNPEFF {
+
+   tag "${accession}:${snpeff}"
 
    publishDir( path: tables_o, 
                mode: 'copy' )
