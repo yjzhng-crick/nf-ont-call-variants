@@ -232,7 +232,7 @@ process LOAD_CLAIR3 {
    tuple val( clair3_model ), val( rerio_url )
 
    output:
-   tuple path( "rerio/clair3_models/${clair3_model}" )
+   path "rerio/clair3_models/${clair3_model}"
 
    script:
    """

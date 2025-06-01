@@ -29,4 +29,4 @@ jobs:
     - name: Test Nextflow pipeline
       run: |
         set -x
-        bash test/run-tests.sh docker
+        bash test/run-tests.sh gh

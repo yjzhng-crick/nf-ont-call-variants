@@ -6,10 +6,10 @@ set -e
 script_dir="$(dirname $0)"
 DOCKER=${1:-no}
 
-if [ "$DOCKER" == "docker" ]
+if [ "$DOCKER" == "gh" ]
 then
     export NXF_CONTAINER_ENGINE=docker
-    docker_flag='-stub -with-docker -profile gh'
+    docker_flag='-stub -profile gh'
 else
     export SINGULARITY_FAKEROOT=1
     export SINGULARITY_TMPDIR="$script_dir/singularity-tmp"
