@@ -532,8 +532,7 @@ process CLAIR3 {
       --include_all_ctgs \
       --haploid_precise \
       --enable_long_indel
-   bcftools index -t merge_output.vcf.gz
-   
+
    """
 }
 
@@ -546,13 +545,14 @@ process NORMALIZE_VCFS {
                mode: 'copy' )
 
    input:
-   tuple val( sample_id ), path( vcf ), path( vcf_idx ), path( fasta ), path( fai )
+   tuple val( sample_id ), path( vcf ), path( fasta ), path( fai )
 
    output:
    tuple val( sample_id ), path( "*.normalized.vcf.gz" ), path( "*.tbi" )
 
    script:
    """
+   bcftools index -t ${vcf}
    zcat ${vcf} \
       | bcftools view -i 'GT="alt"' \
       | bcftools norm -f ${fasta} -a -c e -m - \
@@ -571,13 +571,17 @@ process MERGE_VCFS {
    label 'some_mem'
 
    input:
-   tuple val( accession ), path( vcfs ), path( vcf_idxs )
+   tuple val( accession ), path( vcfs )
 
    output:
    tuple val( accession ), path( "*-merged.vcf" )
 
    script:
    """
+   for vcf in ${vcfs}
+   do
+      bcftools index -t "\$vcf"
+   done
    bcftools merge --file-list <(ls -1 *.vcf.gz) -O v -o ${accession}-merged.vcf
    """
 }
