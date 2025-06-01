@@ -122,9 +122,8 @@ workflow {
 
    Channel.of( [ 
       params.clair3_model, 
-      params.rerio_url ],
-   ) | LOAD_CLAIR3
-   Channel.of( params.gatk_image ) | LOAD_GATK
+      params.rerio_url 
+   ]) | LOAD_CLAIR3
    Channel.of( params.snpeff_url ) | LOAD_SNPEFF
 
    sample_ch.map { tuple( it[0], it[2] ) } | FASTQC  
@@ -239,7 +238,7 @@ process LOAD_CLAIR3 {
    """
    git clone ${rerio_url}
    python rerio/download_model.py --clair3 rerio/clair3_models/${clair3_model}_model
-   
+
    """
 }
 

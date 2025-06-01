@@ -13,10 +13,10 @@ then
 else
     export SINGULARITY_FAKEROOT=1
     export SINGULARITY_TMPDIR="$script_dir/singularity-tmp"
+    mkdir -p "$SINGULARITY_TMPDIR"
     docker_flag=''
 fi
 
-mkdir -p "$SINGULARITY_TMPDIR"
 nextflow run "$script_dir"/.. \
     -resume $docker_flag \
     --sample_sheet "$script_dir"/sample-sheet.csv \
