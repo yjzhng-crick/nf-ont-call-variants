@@ -1,7 +1,6 @@
  #!/usr/bin/env bash
 
-set -x
-set -e
+set -xeuo pipefail
 
 script_dir="$(dirname $0)"
 DOCKER=${1:-no}
@@ -12,8 +11,6 @@ then
     docker_flag='-profile gh'
 else
     export SINGULARITY_FAKEROOT=1
-    export SINGULARITY_TMPDIR="$script_dir/singularity-tmp"
-    mkdir -p "$SINGULARITY_TMPDIR"
     docker_flag=''
 fi
 

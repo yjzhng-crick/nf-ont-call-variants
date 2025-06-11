@@ -5,16 +5,21 @@ channels:
     - bioconda
 
 dependencies:
-    - python==3.11
+    - python==3.12
     - pip
     - bioconda::bcftools
     - bioconda::bowtie2
     - bioconda::fastqc
     - bioconda::minimap2
     - bioconda::mosdepth
+    - bioconda::perl-uri
     - bioconda::samtools
+    - conda-forge::curl
+    - conda-forge::git
     - conda-forge::gnuplot
     - conda-forge::openjdk
+    - conda-forge::unzip
+    - conda-forge::wget
     - pip:
         - 'cutadapt>=4.0'
         - 'multiqc>=1.21'

@@ -3,6 +3,8 @@
 ![GitHub Workflow Status (with branch)](https://img.shields.io/github/actions/workflow/status/scbirlab/nf-ont-call-variants/nf-test.yml)
 [![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A523.10.0-23aa62.svg)](https://www.nextflow.io/)
 [![run with conda](https://img.shields.io/badge/run%20with-conda-3EB049?labelColor=000000&logo=anaconda)](https://docs.conda.io/en/latest/)
+[![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?labelColor=000000&logo=docker)](https://www.docker.com/)
+[![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg?labelColor=000000)](https://sylabs.io/docs/)
 
 **scbirlab/nf-ont-call-variants** is a Nextflow pipeline to call variants 
 from Nanopore FASTQ files from bacterial clones relative to a wildtype control.
@@ -46,17 +48,17 @@ Then merge resulting GVCFs using GATK `CombineGVCFs`. With the combined variant 
 
 ### Software
 
-You need to have Nextflow and `conda` installed on your system.
+You need to have Nextflow and either Conda, Singularity, or Docker installed on your system.
 
 #### First time using Nextflow?
 
 If you're at the Crick or your shared cluster has it already installed, try:
 
 ```bash
-module load Nextflow
+module load Nextflow Singularity
 ```
 
-Otherwise, if it's your first time using Nextflow on your system, you can install it using `conda`:
+Otherwise, if it's your first time using Nextflow on your system and you have Conda installed, you can install it using `conda`:
 
 ```bash
 conda install -c bioconda nextflow 

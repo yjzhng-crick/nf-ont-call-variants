@@ -68,8 +68,6 @@ log.info """\
          inputs
             input dir.     : ${params.inputs}
             sample sheet   : ${params.sample_sheet}
-         genome 
-            SnpEff organism: ${params.snpeff_database}
          trimming 
             quality        : ${params.trim_qual}
             minimum length : ${params.min_length}
