@@ -12,6 +12,7 @@ dependencies:
     - bioconda::fastqc
     - bioconda::minimap2
     - bioconda::mosdepth
+    - bioconda::perl-uri
     - bioconda::samtools
     - conda-forge::curl
     - conda-forge::git
