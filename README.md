@@ -48,17 +48,17 @@ Then merge resulting GVCFs using GATK `CombineGVCFs`. With the combined variant 
 
 ### Software
 
-You need to have Nextflow and `conda` installed on your system.
+You need to have Nextflow and either Conda, Singularity, or Docker installed on your system.
 
 #### First time using Nextflow?
 
 If you're at the Crick or your shared cluster has it already installed, try:
 
 ```bash
-module load Nextflow
+module load Nextflow Singularity
 ```
 
-Otherwise, if it's your first time using Nextflow on your system, you can install it using `conda`:
+Otherwise, if it's your first time using Nextflow on your system and you have Conda installed, you can install it using `conda`:
 
 ```bash
 conda install -c bioconda nextflow 
