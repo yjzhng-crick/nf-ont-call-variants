@@ -13,9 +13,10 @@ dependencies:
     - bioconda::minimap2
     - bioconda::mosdepth
     - bioconda::samtools
+    - conda-forge::curl
+    - conda-forge::git
     - conda-forge::gnuplot
     - conda-forge::openjdk
-    - conda-forge::curl
     - conda-forge::unzip
     - conda-forge::wget
     - pip:
