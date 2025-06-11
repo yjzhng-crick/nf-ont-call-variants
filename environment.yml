@@ -16,6 +16,7 @@ dependencies:
     - conda-forge::gnuplot
     - conda-forge::openjdk
     - conda-forge::curl
+    - conda-forge::unzip
     - conda-forge::wget
     - pip:
         - 'cutadapt>=4.0'
